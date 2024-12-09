@@ -14,12 +14,12 @@ api_hash = 'eddfccf6e4ea21255498028e5af25eb1'  # Inserisci il tuo API Hash
 # Configurazione SMTP per email
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-EMAIL_ADDRESS = "tua.email@gmail.com"  # Email che invia le segnalazioni
-EMAIL_PASSWORD = "tua_password_email"  # Password o password per app
+EMAIL_ADDRESS = "abadaalessandro6@gmail.com"  # Email che invia le segnalazioni
+EMAIL_PASSWORD = "tult pukz jfle txfr"  # Password o password per app
 
 # API gratuita per generazione di testo intelligente
 AI_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-headers = {"Authorization": "Bearer FREE_API_TOKEN"}  # Inserisci un token valido o usane uno gratuito
+headers = {"Authorization": "Bearer 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"}  # Inserisci un token valido o usane uno gratuito
 
 # ID utente autorizzato e gruppo log
 AUTHORIZED_USER_ID = 6849853752
