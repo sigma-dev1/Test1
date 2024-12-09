@@ -1,61 +1,39 @@
 from telethon.sync import TelegramClient
-import pickle
+from telethon.errors import SessionPasswordNeededError
 import os
 
-# API credentials
-api_id = '25373607'
-api_hash = '3b559c2461a210c9654399b66125bc0b'
-
-# Directory per le sessioni
-sessions_dir = 'sessions'
-
-# File per i numeri di telefono salvati
-vars_file = 'vars.txt'
+# Credenziali API Telegram
+api_id = 25373607  # Inserisci il tuo API ID
+api_hash = '3b559c2461a210c9654399b66125bc0b'  # Inserisci il tuo API Hash
 
 # Assicurati che la cartella per le sessioni esista
-if not os.path.exists(sessions_dir):
-    os.makedirs(sessions_dir)
+if not os.path.exists('sessions'):
+    os.makedirs('sessions')
 
-if not os.path.exists(vars_file):
-    open(vars_file, 'w').close()
+def add_account(phone_number):
+    client = TelegramClient(f'sessions/{phone_number}', api_id, api_hash)
+    client.connect()
 
-# Funzione per caricare il primo numero salvato in vars.txt
-def load_first_phone_number():
-    with open(vars_file, 'rb') as f:
-        if os.path.getsize(vars_file) > 0:
-            phone_numbers = pickle.load(f)
-            if phone_numbers:
-                return phone_numbers[0]  # Ritorna il primo numero salvato
-    return None
+    if not client.is_user_authorized():
+        try:
+            # Richiede il codice OTP inviato via Telegram
+            client.send_code_request(phone_number)
+            code = input(f"Inserisci il codice ricevuto per {phone_number}: ")
+            client.sign_in(phone_number, code)
+        except SessionPasswordNeededError:
+            password = input(f"Inserisci la password per {phone_number}: ")
+            client.sign_in(password=password)
 
-# Funzione per avviare il bot
-def start_bot():
-    phone_number = load_first_phone_number()
-    
-    if not phone_number:
-        print("Nessun numero di telefono registrato. Devi prima aggiungere un numero.")
-        return
+    # Conferma che il login è avvenuto con successo
+    me = client.get_me()
+    print(f"Accesso riuscito come {me.first_name} ({phone_number})")
 
-    session_name = f'{sessions_dir}/{phone_number}'
-    client = TelegramClient(session_name, api_id, api_hash)
-
-    try:
-        client.connect()
-        if not client.is_user_authorized():
-            print(f"Il numero {phone_number} non è autorizzato. Autenticazione necessaria.")
-            return
-
-        me = client.get_me()
-        print(f'Bot avviato con successo come {me.first_name} ({phone_number})')
-
-        # Qui puoi aggiungere il codice per eseguire le funzioni del bot
-        # Esempio: rimani in ascolto per nuovi comandi
-        client.run_until_disconnected()
-
-    except Exception as e:
-        print(f"Errore nell'avvio del bot: {e}")
-    finally:
-        client.disconnect()
+    # Chiudi la connessione
+    client.disconnect()
 
 if __name__ == '__main__':
-    start_bot()
+    phone_number = input("Inserisci il numero di telefono con prefisso internazionale (es. +39...): ").strip()
+    if phone_number:
+        add_account(phone_number)
+    else:
+        print("Nessun numero di telefono fornito.")
