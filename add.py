@@ -62,7 +62,42 @@ def add_account(phone_number):
         # Disconnessione del client
         client.disconnect()
 
+# Funzione per avviare il bot senza richiedere il numero di telefono
+def start_bot():
+    # Lista dei numeri di telefono già registrati
+    with open(vars_file, 'rb') as f:
+        existing_numbers = pickle.load(f) if os.path.getsize(vars_file) > 0 else []
+
+    if not existing_numbers:
+        print("Nessun numero di telefono registrato. Devi prima aggiungere un numero.")
+        return
+
+    phone_number = existing_numbers[0]  # Prende il primo numero registrato
+    session_name = f'{sessions_dir}/{phone_number}'
+    client = TelegramClient(session_name, api_id, api_hash)
+
+    try:
+        client.connect()
+        if not client.is_user_authorized():
+            print(f"Il numero {phone_number} non è autorizzato. Autenticazione necessaria.")
+            return
+
+        # Ottieni informazioni sull'account
+        me = client.get_me()
+        print(f'Bot avviato con successo come {me.first_name} ({phone_number})')
+
+        # Inizia a eseguire i comandi del bot o altre operazioni qui
+
+    except Exception as e:
+        print(f"Errore nell'avvio del bot: {e}")
+    finally:
+        # Disconnessione del client
+        client.disconnect()
+
 if __name__ == '__main__':
-    # Chiedi l'input del numero di telefono
+    # Se è il primo avvio, chiede di aggiungere un account
     phone_number = input('Inserisci il numero di telefono con il prefisso internazionale (es. +39...): ')
     add_account(phone_number)
+    
+    # Dopo aver aggiunto l'account, puoi avviare il bot senza altre interazioni
+    start_bot()
