@@ -8,8 +8,8 @@ import asyncio
 from datetime import datetime
 
 # Credenziali API di Telegram
-api_id = 21963510  # Inserisci il tuo API ID
-api_hash = 'eddfccf6e4ea21255498028e5af25eb1'  # Inserisci il tuo API Hash
+api_id = 25373607  # Inserisci il tuo API ID
+api_hash = '3b559c2461a210c9654399b66125bc0b'  # Inserisci il tuo API Hash
 
 # Configurazione SMTP per email
 SMTP_SERVER = "smtp.gmail.com"
