@@ -3,7 +3,7 @@ from telethon.errors import SessionPasswordNeededError
 import os
 
 api_id = 25373607
-api_hash = '3b559c2461a210c9654399b66125bc0b
+api_hash = '3b559c2461a210c9654399b66125bc0b'
 
 def add_account(phone_number):
     client = TelegramClient(f'sessions/{phone_number}', api_id, api_hash)
