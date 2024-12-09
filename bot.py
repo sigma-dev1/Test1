@@ -2,7 +2,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from telethon import TelegramClient, events
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import SessionPasswordNeededError, PhoneNumberInvalidError
 import requests
 import asyncio
 from datetime import datetime
@@ -16,14 +16,6 @@ SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 EMAIL_ADDRESS = "abadaalessandro6@gmail.com"  # Email che invia le segnalazioni
 EMAIL_PASSWORD = "tult pukz jfle txfr"  # Password o password per app
-
-# API gratuita per generazione di testo intelligente
-AI_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
-headers = {"Authorization": "Bearer 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"}  # Inserisci un token valido o usane uno gratuito
-
-# ID utente autorizzato e gruppo log
-AUTHORIZED_USER_ID = 6849853752
-AUTHORIZED_GROUP_ID = -4692421717
 
 # Inizializza il client Telegram
 client = TelegramClient('monitor_session', api_id, api_hash)
@@ -49,20 +41,6 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print(f"Errore nell'invio dell'email: {e}")
 
-# Funzione per generare un messaggio dettagliato tramite AI
-def generate_ai_message(group_link):
-    prompt = f"Generate a formal and persuasive email to Telegram Support about the group {group_link}. The email should explain why the group violates Telegram's terms of service, including examples of prohibited content like hate speech, spam, or illegal activities."
-    try:
-        response = requests.post(AI_API_URL, headers=headers, json={"inputs": prompt})
-        if response.status_code == 200:
-            return response.json()["generated_text"]
-        else:
-            print("Errore nella richiesta all'API AI.")
-            return f"The group {group_link} violates Telegram's policies by sharing prohibited content."
-    except Exception as e:
-        print(f"Errore durante la generazione del messaggio: {e}")
-        return f"The group {group_link} violates Telegram's policies by sharing prohibited content."
-
 # Funzione per monitorare i gruppi
 async def monitor_group(group_link):
     group_id = group_link.split("/")[-1]  # Ricava l'ID del gruppo dal link
@@ -81,45 +59,35 @@ async def monitor_group(group_link):
 # Comando: /report
 @client.on(events.NewMessage(pattern=r'/report (.+)'))
 async def report_handler(event):
-    if event.chat_id != AUTHORIZED_GROUP_ID or event.sender_id != AUTHORIZED_USER_ID:
-        await event.reply("You are not authorized to use this bot.")
-        return
-
     group_link = event.pattern_match.group(1)
     await event.reply(f"Tracking the group: {group_link}. Please wait...")
 
     # Analizza il gruppo e genera il messaggio
     banned = await monitor_group(group_link)
-    ai_message = generate_ai_message(group_link)
 
     if banned:
         await event.reply(f"The group {group_link} has been banned or deleted.")
         send_email(
             to_email="support@telegram.org",
             subject="Group Violation Report",
-            body=ai_message,
+            body=f"The group {group_link} has been banned or deleted."
         )
     else:
-        await event.reply(f"The group {group_link} is being monitored for violations.")
+        await event.reply(f"The group {group_link} is active and being monitored.")
         send_email(
             to_email="support@telegram.org",
-            subject="Group Violation Report",
-            body=ai_message,
+            subject="Group Status Report",
+            body=f"The group {group_link} is active and being monitored."
         )
 
 # Comando: /lista
 @client.on(events.NewMessage(pattern=r'/lista'))
 async def list_handler(event):
-    if event.chat_id != AUTHORIZED_GROUP_ID or event.sender_id != AUTHORIZED_USER_ID:
-        await event.reply("You are not authorized to use this bot.")
-        return
-
     message = "Tracked Groups:\n"
     for group, data in tracked_groups.items():
         status = data["status"]
         time_tracked = data["time"].strftime("%Y-%m-%d %H:%M:%S")
         message += f"- {group}: {status} (since {time_tracked})\n"
-
     await event.reply(message)
 
 # Task periodico: controlla lo stato dei gruppi
@@ -138,13 +106,7 @@ async def check_tracked_groups():
                 tracked_groups[group_link]["status"] = "deleted"
                 await client.send_message(
                     AUTHORIZED_GROUP_ID,
-                    f"The group {group_link} has been deleted or banned.",
-                )
-                ai_message = generate_ai_message(group_link)
-                send_email(
-                    to_email="support@telegram.org",
-                    subject="Group Status Update",
-                    body=ai_message,
+                    f"The group {group_link} has been deleted or banned."
                 )
         await asyncio.sleep(3600)  # Controlla ogni ora
 
