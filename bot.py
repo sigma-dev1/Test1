@@ -2,12 +2,11 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from telethon import TelegramClient, events
-from telethon.errors import UserPrivacyRestrictedError, ChatAdminRequiredError
+from telethon.errors.rpcerrorlist import UserPrivacyRestrictedError
+import openai
 import os
 import asyncio
 from datetime import datetime
-import tensorflow as tf
-from transformers import TFAutoModelForSequenceClassification, AutoTokenizer
 
 # Credenziali API Telegram
 api_id = 25373607
@@ -20,17 +19,18 @@ SMTP_PORT = 587
 EMAIL_ADDRESS = "abadaalessandro6@gmail.com"
 EMAIL_PASSWORD = "tult pukz jfle txfr"
 
+# OpenAI API Key
+openai.api_key = "LA_TUA_API_KEY_OPENAI"
+
 # ID utente autorizzato
 AUTHORIZED_USER_ID = 6849853752  # Cambia con l'ID dell'utente autorizzato
 
 # Variabili per tracciare lo stato dei gruppi
 tracked_groups = {}  # {group_link: {"status": "active/banned/deleted", "last_check": datetime}}
 
-# Carica modello di intelligenza artificiale
-print("Caricamento del tokenizer e del modello...")
-tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
-model = TFAutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
-print("Tokenizer e modello caricati.")
+# Inizializza il client Telegram
+client = TelegramClient("bot", api_id, api_hash).start(bot_token=bot_token)
+print("Client Telegram inizializzato.")
 
 # Funzione per inviare email
 def send_email(to_email, subject, body):
@@ -48,11 +48,21 @@ def send_email(to_email, subject, body):
         server.quit()
         print(f"Email inviata con successo a {to_email}.")
     except Exception as e:
-        print(f"Errore nell'invio dell'email: {e}")
+        print(f"Errore durante l'invio dell'email: {e}")
 
-# Inizializza il client Telegram
-client = TelegramClient("bot", api_id, api_hash).start(bot_token=bot_token)
-print("Client Telegram inizializzato.")
+# Funzione per analizzare il contenuto con OpenAI
+def analyze_content_with_openai(content: str) -> str:
+    try:
+        response = openai.Completion.create(
+            engine="text-davinci-003",
+            prompt=f"Analizza il seguente contenuto per eventuali violazioni delle regole:\n{content}",
+            max_tokens=200,
+            temperature=0.5,
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        print(f"Errore nell'analisi con OpenAI: {e}")
+        return "Errore durante l'analisi del contenuto."
 
 # Funzione per monitorare un gruppo
 async def monitor_group(group_link):
@@ -68,57 +78,37 @@ async def monitor_group(group_link):
         tracked_groups[group_link]["status"] = "banned"
         return True  # Gruppo bannato
 
-# Funzione per analizzare i messaggi di un gruppo
+# Funzione per analizzare i messaggi del gruppo
 async def analyze_group_content(group_link):
-    try:
-        group = await client.get_entity(group_link)
-        messages = await client.get_messages(group, limit=100)  # Ultimi 100 messaggi
-        content = " ".join([msg.message for msg in messages if msg.message])
+    print(f"Analizzando il contenuto del gruppo: {group_link}")
+    group = await client.get_entity(group_link)
+    messages = await client.get_messages(group, limit=100)  # Analizza gli ultimi 100 messaggi
+    content = " ".join([msg.message for msg in messages if msg.message])
 
-        inputs = tokenizer(content, return_tensors="tf")
-        outputs = model(inputs)
-        scores = outputs.logits.numpy()[0]
-        predictions = tf.nn.softmax(scores).numpy()
-        labels = ["NEGATIVE", "POSITIVE"]
-
-        analysis = [{"label": labels[i], "score": predictions[i]} for i in range(len(labels))]
-        return analysis
-    except ChatAdminRequiredError:
-        print(f"Accesso negato al gruppo {group_link}.")
-        return []
-    except Exception as e:
-        print(f"Errore durante l'analisi del gruppo {group_link}: {e}")
-        return []
+    print("Inizio analisi con OpenAI...")
+    analysis = analyze_content_with_openai(content)
+    print("Analisi completata.")
+    return analysis
 
 # Funzione per creare una segnalazione email
 def create_report(group_link, analysis):
-    violations = [item for item in analysis if item['label'] == 'NEGATIVE' and item['score'] > 0.6]
-    if violations:
-        violation_details = "\n".join([f"Label: {item['label']} | Confidence: {item['score']:.2f}" for item in violations])
-        report = (
-            f"Dear Telegram Support,\n\n"
-            f"I would like to report the following group: {group_link}.\n\n"
-            f"This group appears to violate Telegram's Terms of Service based on the following content:\n\n"
-            f"{violation_details}\n\n"
-            f"Thank you for your prompt attention to this matter.\n\n"
-            f"Best regards,\nA concerned user"
-        )
-    else:
-        report = (
-            f"Dear Telegram Support,\n\n"
-            f"I would like to report the following group: {group_link}.\n\n"
-            f"No specific violations were found, but please review the group for compliance with Telegram's Terms of Service.\n\n"
-            f"Thank you for your prompt attention to this matter.\n\n"
-            f"Best regards,\nA concerned user"
-        )
+    report = (
+        f"Dear Telegram Support,\n\n"
+        f"I would like to report the following group: {group_link}.\n\n"
+        f"This group appears to violate Telegram's Terms of Service based on the following analysis:\n\n"
+        f"{analysis}\n\n"
+        f"Thank you for your prompt attention to this matter.\n\n"
+        f"Best regards,\nA concerned user"
+    )
+    print("Report creato.")
     return report
 
 # Comando: /start
 @client.on(events.NewMessage(pattern=r"/start"))
 async def start_handler(event):
     if event.sender_id == AUTHORIZED_USER_ID:
-        await event.reply("Ciao! Usa /report [link gruppo] per monitorare e analizzare un gruppo. Usa /lista per vedere i gruppi monitorati.")
-        print("Messaggio di avvio inviato.")
+        await event.reply("Ciao, sono attivo! Utilizza i comandi /report e /lista per monitorare e analizzare i gruppi.")
+        print("Messaggio di avvio inviato all'utente autorizzato.")
 
 # Comando: /report
 @client.on(events.NewMessage(pattern=r"/report (.+)"))
@@ -127,22 +117,35 @@ async def report_handler(event):
         return
 
     group_link = event.pattern_match.group(1)
-    await event.reply(f"Monitoraggio del gruppo {group_link}. Attendi...")
+    await event.reply(f"Sto monitorando il gruppo: {group_link}. Attendi per favore...")
 
+    # Aggiungi il gruppo ai tracciati
     banned = await monitor_group(group_link)
+
+    # Analizza il contenuto del gruppo
     analysis = await analyze_group_content(group_link)
     report_message = create_report(group_link, analysis)
 
+    # Invia segnalazione email
     send_email(
         to_email="support@telegram.org",
         subject=f"Group Report: {group_link}",
         body=report_message,
     )
 
+    email_preview = (
+        f"Email inviata a support@telegram.org:\n\n"
+        f"Soggetto: Group Report: {group_link}\n\n"
+        f"Corpo del messaggio:\n{report_message}"
+    )
+
     if banned:
-        await event.reply(f"Il gruppo {group_link} è bannato. Segnalazione inviata.")
+        tracked_groups[group_link]["status"] = "banned"
+        await event.reply(f"Il gruppo {group_link} è già bannato. Report inviato.\n\n{email_preview}")
     else:
-        await event.reply(f"Segnalazione inviata per il gruppo {group_link}. Continuerà a essere monitorato.")
+        await event.reply(
+            f"Report inviato per il gruppo {group_link}. Continuerà a essere monitorato.\n\n{email_preview}"
+        )
 
 # Comando: /lista
 @client.on(events.NewMessage(pattern=r"/lista"))
@@ -160,8 +163,9 @@ async def list_handler(event):
 
 # Funzione principale
 async def main():
-    print("Bot in esecuzione...")
-    await client.run_until_disconnected()
+    print("Bot attivo e in ascolto...")
+    await client.start()
 
 if __name__ == "__main__":
-    client.loop.run_until_complete(main())
+    with client:
+        client.loop.run_until_complete(main())
