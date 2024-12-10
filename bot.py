@@ -18,10 +18,10 @@ EMAIL_ADDRESS = "abadaalessandro6@gmail.com"
 EMAIL_PASSWORD = "tult pukz jfle txfr"
 
 # ID utente autorizzato e gruppo log
-AUTHORIZED_USER_ID = 6849853752
-AUTHORIZED_GROUP_ID = -4692421717
+AUTHORIZED_USER_ID = 6849853752  # Cambia con l'ID dell'utente autorizzato
+AUTHORIZED_GROUP_ID = -4692421717  # Cambia con l'ID del gruppo autorizzato
 
-# Percorso sessione salvata
+# Percorso della directory delle sessioni
 SESSION_DIR = "sessions"
 
 # Variabili per tracciare lo stato dei gruppi
@@ -161,6 +161,11 @@ async def main():
     print("Bot is active and listening...")
     await client.start()
     client.loop.create_task(monitor_tracked_groups())
+
+if __name__ == "__main__":
+    with client:
+        client.loop.run_until_complete(main())
+
 
 if __name__ == "__main__":
     with client:
