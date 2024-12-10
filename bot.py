@@ -3,6 +3,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from telethon import TelegramClient, events
 from telethon.errors.rpcerrorlist import UserPrivacyRestrictedError
+from transformers import pipeline
 import os
 import asyncio
 from datetime import datetime
@@ -10,6 +11,7 @@ from datetime import datetime
 # Credenziali API Telegram
 api_id = 25373607
 api_hash = "3b559c2461a210c9654399b66125bc0b"
+bot_token = "7396062831:AAFVJ50ZvxuwUlc2D9Pssj_aWAEd8FquG8Y"
 
 # Configurazione SMTP per email
 SMTP_SERVER = "smtp.gmail.com"
@@ -17,15 +19,14 @@ SMTP_PORT = 587
 EMAIL_ADDRESS = "abadaalessandro6@gmail.com"
 EMAIL_PASSWORD = "tult pukz jfle txfr"
 
-# ID utente autorizzato e gruppo log
+# ID utente autorizzato
 AUTHORIZED_USER_ID = 6849853752  # Cambia con l'ID dell'utente autorizzato
-AUTHORIZED_GROUP_ID = -4692421717  # Cambia con l'ID del gruppo autorizzato
-
-# Percorso della directory delle sessioni
-SESSION_DIR = "sessions"
 
 # Variabili per tracciare lo stato dei gruppi
 tracked_groups = {}  # {group_link: {"status": "active/banned/deleted", "last_check": datetime}}
+
+# Inizializza il modello di intelligenza artificiale
+analyzer = pipeline("text-classification", model="distilbert-base-uncased-finetuned-sst-2-english")
 
 # Funzione per inviare email
 def send_email(to_email, subject, body):
@@ -45,24 +46,8 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print(f"Error sending email: {e}")
 
-# Trova la sessione salvata
-def find_session():
-    if not os.path.exists(SESSION_DIR):
-        print("No saved session found. Please add an account using add.py first.")
-        return None
-    sessions = [f for f in os.listdir(SESSION_DIR) if f.endswith(".session")]
-    if not sessions:
-        print("No saved session found. Please add an account using add.py first.")
-        return None
-    return os.path.join(SESSION_DIR, sessions[0].replace(".session", ""))
-
-# Trova una sessione valida
-session_name = find_session()
-if not session_name:
-    exit(1)
-
 # Inizializza il client Telegram
-client = TelegramClient(session_name, api_id, api_hash)
+client = TelegramClient("bot", api_id, api_hash).start(bot_token=bot_token)
 
 # Funzione per monitorare un gruppo
 async def monitor_group(group_link):
@@ -78,21 +63,64 @@ async def monitor_group(group_link):
         tracked_groups[group_link]["status"] = "banned"
         return True  # Gruppo bannato
 
-# Funzione per creare una segnalazione email
-def create_report(group_link):
-    return (
-        f"Dear Telegram Support,\n\n"
-        f"I would like to report the following group: {group_link}.\n\n"
-        f"This group appears to violate Telegram's Terms of Service, and I kindly request that you review its activities. "
-        f"Groups like this often engage in spam, hateful content, or other prohibited activities that harm the community.\n\n"
-        f"Thank you for your prompt attention to this matter.\n\n"
-        f"Best regards,\nA concerned user"
-    )
+# Funzione per analizzare i messaggi del gruppo
+async def analyze_group_content(group_link):
+    group = await client.get_entity(group_link)
+    messages = await client.get_messages(group, limit=100)  # Analizza gli ultimi 100 messaggi
+    content = " ".join([msg.message for msg in messages if msg.message])
+    
+    analysis = analyzer(content)
+    return analysis
+
+# Funzione per creare una segnalazione email basata sull'analisi dell'IA
+def create_report(group_link, analysis):
+    violations = [item for item in analysis if item['label'] == 'NEGATIVE']
+    if violations:
+        violation_details = "\n".join([f"Text: {item['text']} | Confidence: {item['score']}" for item in violations])
+        report = (
+            f"Dear Telegram Support,\n\n"
+            f"I would like to report the following group: {group_link}.\n\n"
+            f"This group appears to violate Telegram's Terms of Service based on the following content:\n\n"
+            f"{violation_details}\n\n"
+            f"Thank you for your prompt attention to this matter.\n\n"
+            f"Best regards,\nA concerned user"
+        )
+    else:
+        report = (
+            f"Dear Telegram Support,\n\n"
+            f"I would like to report the following group: {group_link}.\n\n"
+            f"No specific violations were found, but please review the group for compliance with Telegram's Terms of Service.\n\n"
+            f"Thank you for your prompt attention to this matter.\n\n"
+            f"Best regards,\nA concerned user"
+        )
+    return report
+
+# Funzione per inviare notifiche di tracciamento
+async def send_tracking_notifications():
+    while True:
+        for group_link, data in list(tracked_groups.items()):
+            group_id = group_link.split("/")[-1]
+            try:
+                await client.get_entity(group_id)
+                if data["status"] in ["banned", "deleted"]:
+                    tracked_groups[group_link]["status"] = "active"
+                    await client.send_message(
+                        AUTHORIZED_USER_ID,
+                        f"The group {group_link} is now active again.",
+                    )
+            except UserPrivacyRestrictedError:
+                if data["status"] == "active":
+                    tracked_groups[group_link]["status"] = "deleted"
+                    await client.send_message(
+                        AUTHORIZED_USER_ID,
+                        f"The group {group_link} has been deleted or banned.",
+                    )
+            await asyncio.sleep(10)  # Controlla ogni 10 secondi per dimostrazione
 
 # Comando: /report
 @client.on(events.NewMessage(pattern=r"/report (.+)"))
 async def report_handler(event):
-    if event.sender_id != AUTHORIZED_USER_ID or event.chat_id != AUTHORIZED_GROUP_ID:
+    if event.sender_id != AUTHORIZED_USER_ID:
         return
 
     group_link = event.pattern_match.group(1)
@@ -100,7 +128,10 @@ async def report_handler(event):
 
     # Aggiungi il gruppo ai tracciati
     banned = await monitor_group(group_link)
-    report_message = create_report(group_link)
+
+    # Analizza il contenuto del gruppo
+    analysis = await analyze_group_content(group_link)
+    report_message = create_report(group_link, analysis)
 
     # Invia segnalazione email
     send_email(
@@ -109,18 +140,24 @@ async def report_handler(event):
         body=report_message,
     )
 
+    email_preview = (
+        f"Email inviata a support@telegram.org:\n\n"
+        f"Soggetto: Group Report: {group_link}\n\n"
+        f"Corpo del messaggio:\n{report_message}"
+    )
+
     if banned:
         tracked_groups[group_link]["status"] = "banned"
-        await event.reply(f"The group {group_link} is already banned. Report submitted.")
+        await event.reply(f"The group {group_link} is already banned. Report submitted.\n\n{email_preview}")
     else:
         await event.reply(
-            f"Report submitted for the group {group_link}. It will be continuously monitored."
+            f"Report submitted for the group {group_link}. It will be continuously monitored.\n\n{email_preview}"
         )
 
 # Comando: /lista
 @client.on(events.NewMessage(pattern=r"/lista"))
 async def list_handler(event):
-    if event.sender_id != AUTHORIZED_USER_ID or event.chat_id != AUTHORIZED_GROUP_ID:
+    if event.sender_id != AUTHORIZED_USER_ID:
         return
 
     message = "Tracked Groups:\n"
@@ -131,36 +168,11 @@ async def list_handler(event):
 
     await event.reply(message)
 
-# Funzione per monitorare continuamente i gruppi
-async def monitor_tracked_groups():
-    while True:
-        for group_link, data in list(tracked_groups.items()):
-            if data["status"] in ["banned", "deleted"]:
-                continue
-
-            group_id = group_link.split("/")[-1]
-            try:
-                await client.get_entity(group_id)
-            except UserPrivacyRestrictedError:
-                tracked_groups[group_link]["status"] = "deleted"
-                await client.send_message(
-                    AUTHORIZED_GROUP_ID,
-                    f"The group {group_link} has been deleted or banned.",
-                )
-                # Reinvia la segnalazione per assicurarsi che non venga ripristinato
-                report_message = create_report(group_link)
-                send_email(
-                    to_email="support@telegram.org",
-                    subject=f"Follow-up Report: {group_link}",
-                    body=report_message,
-                )
-        await asyncio.sleep(3600)  # Controlla ogni ora
-
 # Funzione principale
 async def main():
     print("Bot is active and listening...")
     await client.start()
-    client.loop.create_task(monitor_tracked_groups())
+    client.loop.create_task(send_tracking_notifications())
 
 if __name__ == "__main__":
     # Avvia il client Telegram
