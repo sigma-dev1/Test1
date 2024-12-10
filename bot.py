@@ -1,114 +1,162 @@
-from telethon.sync import TelegramClient
-from telethon import events
+from telethon import TelegramClient, events
+from telethon.errors.rpcerrorlist import UserPrivacyRestrictedError, ChannelInvalidError
+from datetime import datetime, timedelta
 import os
-import pickle
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import asyncio
+import pickle
 
-api_id = '21963510'  # Stesso api_id di add.py
-api_hash = 'eddfccf6e4ea21255498028e5af25eb1'  # Stesso api_hash di add.py
+# Configurazione API Telegram
+api_id = 21963510
+api_hash = "eddfccf6e4ea21255498028e5af25eb1"
+AUTHORIZED_USER_ID = 6849853752  # ID dell'utente autorizzato
 
-# ID utente autorizzato
-AUTHORIZED_USER_ID = 6849853752  # Sostituisci con il tuo ID Telegram
+# Configurazione SMTP per email
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+EMAIL_ADDRESS = "abadaalessandro6@gmail.com"
+EMAIL_PASSWORD = "tult pukz jfle txfr"
 
-# Cartella delle sessioni
-SESSIONS_FOLDER = "sessions"
+# Funzione per inviare email
+def send_email(to_email, subject, body):
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_ADDRESS
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
 
-# Carica i numeri di telefono salvati in vars.txt
-def load_sessions():
-    if not os.path.exists("vars.txt"):
-        return []
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        print(f"Email inviata con successo a {to_email}.")
+    except Exception as e:
+        print(f"Errore durante l'invio dell'email: {e}")
+
+# Funzione per verificare se il gruppo è stato bannato o eliminato
+async def check_group_status(group_username, client):
+    try:
+        await client.get_entity(group_username)
+        return "active"  # Gruppo ancora attivo
+    except ChannelInvalidError:
+        return "banned"  # Gruppo bannato o eliminato
+    except Exception:
+        return "unknown"  # Altro errore
+
+# Funzione per creare la segnalazione email
+def create_email_report(group_username):
+    report = (
+        f"Dear Telegram Support,\n\n"
+        f"I would like to report the group @{group_username} for violating Telegram's Terms of Service. "
+        f"Please review the content and take appropriate action.\n\n"
+        f"Thank you for your attention.\n\n"
+        f"Best regards,\nA concerned user"
+    )
+    return report
+
+# Comando: /start
+async def start_handler(event):
+    if event.sender_id == AUTHORIZED_USER_ID:
+        await event.reply(
+            "Hello! I am active. Use /report <username> to monitor a group and /lista to view the monitored groups."
+        )
+    else:
+        await event.reply("You are not authorized to use this bot.")
+
+# Comando: /report <username>
+async def report_handler(event, clients):
+    if event.sender_id != AUTHORIZED_USER_ID:
+        return
+
+    group_username = event.pattern_match.group(1).strip()
+    await event.reply(f"Analyzing group @{group_username}...")
+
+    for client in clients:
+        try:
+            # Verifica se il bot è nel gruppo
+            group = await client.get_entity(group_username)
+        except Exception:
+            await event.reply(f"Group @{group_username} not found or inaccessible.")
+            return
+
+        # Aggiorna o aggiungi il gruppo alla lista monitorata
+        if group_username not in tracked_groups:
+            tracked_groups[group_username] = {
+                "status": "active",
+                "last_check": datetime.now(),
+                "reported_at": datetime.now(),
+            }
+            email_body = create_email_report(group_username)
+            send_email(
+                to_email="support@telegram.org",
+                subject=f"Group Report: @{group_username}",
+                body=email_body,
+            )
+            await event.reply(f"Group @{group_username} has been reported and is now being monitored.")
+        else:
+            await event.reply(f"Group @{group_username} is already being monitored.")
+
+# Funzione per monitorare i gruppi segnalati
+async def monitor_groups(clients):
+    while True:
+        now = datetime.now()
+        for group, data in list(tracked_groups.items()):
+            # Controlla lo stato del gruppo
+            status = await check_group_status(group, clients[0])  # Usa il primo client per monitorare
+            last_status = data["status"]
+
+            # Aggiorna lo stato se è cambiato
+            if status != last_status:
+                tracked_groups[group]["status"] = status
+                tracked_groups[group]["last_check"] = now
+
+                # Invia notifica all'utente
+                if status == "banned":
+                    await client.send_message(
+                        AUTHORIZED_USER_ID,
+                        f"Group @{group} has been banned or deleted. Report successful!",
+                    )
+                elif status == "active":
+                    await client.send_message(
+                        AUTHORIZED_USER_ID,
+                        f"Group @{group} has been reactivated. Report unsuccessful!",
+                    )
+            # Notifica se il gruppo non è stato bannato entro 2 settimane
+            elif last_status == "active" and (now - data["reported_at"]) > timedelta(weeks=2):
+                await client.send_message(
+                    AUTHORIZED_USER_ID,
+                    f"Group @{group} has not been banned after 2 weeks. Report failed."
+                )
+                del tracked_groups[group]  # Rimuove il gruppo dalla lista
+
+        await asyncio.sleep(3600)  # Controlla ogni ora
+
+# Funzione principale
+async def main():
+    print("Userbot attivo e in ascolto...")
     
-    with open("vars.txt", "rb") as f:
-        accounts = []
-        while True:
-            try:
-                account = pickle.load(f)
-                accounts.extend(account)
-            except EOFError:
-                break
-        return accounts
-
-# Inizializza i client per tutte le sessioni salvate
-def initialize_clients():
-    sessions = load_sessions()
+    # Carica le sessioni create tramite add.py
+    session_files = os.listdir('sessions/')
     clients = []
     
-    for phone_number in sessions:
-        session_path = f"{SESSIONS_FOLDER}/{phone_number}"
-        client = TelegramClient(session_path, api_id, api_hash)
-        client.start()
+    for session_file in session_files:
+        client = TelegramClient(f'sessions/{session_file}', api_id, api_hash)
         clients.append(client)
-        print(f"Client attivato per: {phone_number}")
+
+    # Avvia tutti i client Telegram
+    for client in clients:
+        await client.start()
+
+    # Monitoraggio dei gruppi
+    client.loop.create_task(monitor_groups(clients))
     
-    return clients
-
-# Funzione per ottenere una lista di gruppi e canali
-async def list_groups(client):
-    dialogs = await client.get_dialogs()
-    group_list = []
-    for dialog in dialogs:
-        if dialog.is_group or dialog.is_channel:
-            group_list.append((dialog.title, dialog.entity.id))
-    return group_list
-
-# Funzione per scaricare i messaggi da un gruppo
-async def download_group_messages(client, group_id, group_title):
-    messages_text = []
-    async for message in client.iter_messages(group_id):
-        sender_id = message.sender_id
-        text = message.message or ""
-        messages_text.append(f"{sender_id}: {text}")
-    
-    # Salva i messaggi in un file
-    filename = f"{group_title.replace(' ', '_')}_messages.txt"
-    with open(filename, "w", encoding="utf-8") as file:
-        file.write("\n".join(messages_text))
-    return filename
-
-# Funzione principale per gestire i comandi
-def start_bot(client):
-    @client.on(events.NewMessage(pattern="/lista"))
-    async def list_handler(event):
-        if event.sender_id != AUTHORIZED_USER_ID:
-            return  # Ignora i messaggi di utenti non autorizzati
-
-        groups = await list_groups(client)
-        if not groups:
-            await event.reply("Non sono unito a nessun gruppo.")
-            return
-        
-        message = "Ecco i gruppi a cui sono unito:\n"
-        for idx, (title, group_id) in enumerate(groups, start=1):
-            message += f"{idx}. {title} (ID: {group_id})\n"
-        await event.reply(message)
-
-    @client.on(events.NewMessage(pattern=r"/see (\d+)"))
-    async def see_handler(event):
-        if event.sender_id != AUTHORIZED_USER_ID:
-            return  # Ignora i messaggi di utenti non autorizzati
-        
-        index = int(event.pattern_match.group(1))
-        groups = await list_groups(client)
-        
-        if index < 1 or index > len(groups):
-            await event.reply("Indice non valido. Usa /lista per vedere i gruppi disponibili.")
-            return
-        
-        group_title, group_id = groups[index - 1]
-        await event.reply(f"Sto scaricando i messaggi del gruppo: {group_title}. Attendi...")
-        
-        filename = await download_group_messages(client, group_id, group_title)
-        await client.send_file(AUTHORIZED_USER_ID, filename, caption=f"Messaggi del gruppo: {group_title}")
-        os.remove(filename)
-
-    print("Bot avviato e in ascolto...")
-    client.run_until_disconnected()
+    # Esegui il bot fino alla disconnessione
+    await client.run_until_disconnected()
 
 if __name__ == "__main__":
-    clients = initialize_clients()
-    
-    if not clients:
-        print("Nessuna sessione disponibile. Esegui add.py per aggiungere un account.")
-    else:
-        for client in clients:
-            asyncio.run(start_bot(client))
+    with TelegramClient("userbot", api_id, api_hash) as client:
+        client.loop.run_until_complete(main())
