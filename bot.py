@@ -12,7 +12,7 @@ from datetime import datetime
 # Credenziali API Telegram
 api_id = 25373607
 api_hash = "3b559c2461a210c9654399b66125bc0b"
-bot_token = "7396062831:AAFVJ50ZvxuwUlc2D9Pssj_aWAEd8FquG8Y"
+bot_token = "7659684235:AAG7TOMLBRpd7pgNybU0UOrAucvxTANC9H0"
 
 # Configurazione SMTP per email
 SMTP_SERVER = "smtp.gmail.com"
