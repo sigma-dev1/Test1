@@ -3,7 +3,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from telethon import TelegramClient, events
 from telethon.errors.rpcerrorlist import UserPrivacyRestrictedError
-from transformers import pipeline
+import tensorflow as tf
+from transformers import TFAutoModelForSequenceClassification, AutoTokenizer
 import os
 import asyncio
 from datetime import datetime
@@ -25,8 +26,9 @@ AUTHORIZED_USER_ID = 6849853752  # Cambia con l'ID dell'utente autorizzato
 # Variabili per tracciare lo stato dei gruppi
 tracked_groups = {}  # {group_link: {"status": "active/banned/deleted", "last_check": datetime}}
 
-# Inizializza il modello di intelligenza artificiale
-analyzer = pipeline("text-classification", model="distilbert-base-uncased-finetuned-sst-2-english")
+# Inizializza il modello di intelligenza artificiale e il tokenizer
+tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
+model = TFAutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
 
 # Funzione per inviare email
 def send_email(to_email, subject, body):
@@ -68,15 +70,21 @@ async def analyze_group_content(group_link):
     group = await client.get_entity(group_link)
     messages = await client.get_messages(group, limit=100)  # Analizza gli ultimi 100 messaggi
     content = " ".join([msg.message for msg in messages if msg.message])
-    
-    analysis = analyzer(content)
+
+    inputs = tokenizer(content, return_tensors="tf")
+    outputs = model(inputs)
+    scores = outputs[0][0].numpy()
+    predictions = tf.nn.softmax(scores).numpy()
+    labels = ["NEGATIVE", "POSITIVE"]
+    analysis = [{"label": labels[i], "score": predictions[i]} for i in range(len(labels))]
+
     return analysis
 
 # Funzione per creare una segnalazione email basata sull'analisi dell'IA
 def create_report(group_link, analysis):
-    violations = [item for item in analysis if item['label'] == 'NEGATIVE']
+    violations = [item for item in analysis if item['label'] == 'NEGATIVE' and item['score'] > 0.6]  # Soglia di confidenza
     if violations:
-        violation_details = "\n".join([f"Text: {item['text']} | Confidence: {item['score']}" for item in violations])
+        violation_details = "\n".join([f"Text: {item['label']} | Confidence: {item['score']}" for item in violations])
         report = (
             f"Dear Telegram Support,\n\n"
             f"I would like to report the following group: {group_link}.\n\n"
