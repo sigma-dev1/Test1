@@ -1,171 +1,114 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from telethon import TelegramClient, events
-from telethon.errors.rpcerrorlist import UserPrivacyRestrictedError
-import openai
+from telethon.sync import TelegramClient
+from telethon import events
 import os
+import pickle
 import asyncio
-from datetime import datetime
 
-# Credenziali API Telegram
-api_id = 25373607
-api_hash = "3b559c2461a210c9654399b66125bc0b"
-bot_token = "7396062831:AAFVJ50ZvxuwUlc2D9Pssj_aWAEd8FquG8Y"
-
-# Configurazione SMTP per email
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-EMAIL_ADDRESS = "abadaalessandro6@gmail.com"
-EMAIL_PASSWORD = "tult pukz jfle txfr"
-
-# OpenAI API Key
-openai.api_key = "LA_TUA_API_KEY_OPENAI"
+api_id = '21963510'  # Stesso api_id di add.py
+api_hash = 'eddfccf6e4ea21255498028e5af25eb1'  # Stesso api_hash di add.py
 
 # ID utente autorizzato
-AUTHORIZED_USER_ID = 6849853752  # Cambia con l'ID dell'utente autorizzato
+AUTHORIZED_USER_ID = 6849853752  # Sostituisci con il tuo ID Telegram
 
-# Variabili per tracciare lo stato dei gruppi
-tracked_groups = {}  # {group_link: {"status": "active/banned/deleted", "last_check": datetime}}
+# Cartella delle sessioni
+SESSIONS_FOLDER = "sessions"
 
-# Inizializza il client Telegram
-client = TelegramClient("bot", api_id, api_hash).start(bot_token=bot_token)
-print("Client Telegram inizializzato.")
+# Carica i numeri di telefono salvati in vars.txt
+def load_sessions():
+    if not os.path.exists("vars.txt"):
+        return []
+    
+    with open("vars.txt", "rb") as f:
+        accounts = []
+        while True:
+            try:
+                account = pickle.load(f)
+                accounts.extend(account)
+            except EOFError:
+                break
+        return accounts
 
-# Funzione per inviare email
-def send_email(to_email, subject, body):
-    try:
-        msg = MIMEMultipart()
-        msg["From"] = EMAIL_ADDRESS
-        msg["To"] = to_email
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain"))
+# Inizializza i client per tutte le sessioni salvate
+def initialize_clients():
+    sessions = load_sessions()
+    clients = []
+    
+    for phone_number in sessions:
+        session_path = f"{SESSIONS_FOLDER}/{phone_number}"
+        client = TelegramClient(session_path, api_id, api_hash)
+        client.start()
+        clients.append(client)
+        print(f"Client attivato per: {phone_number}")
+    
+    return clients
 
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-        server.send_message(msg)
-        server.quit()
-        print(f"Email inviata con successo a {to_email}.")
-    except Exception as e:
-        print(f"Errore durante l'invio dell'email: {e}")
+# Funzione per ottenere una lista di gruppi e canali
+async def list_groups(client):
+    dialogs = await client.get_dialogs()
+    group_list = []
+    for dialog in dialogs:
+        if dialog.is_group or dialog.is_channel:
+            group_list.append((dialog.title, dialog.entity.id))
+    return group_list
 
-# Funzione per analizzare il contenuto con OpenAI
-def analyze_content_with_openai(content: str) -> str:
-    try:
-        response = openai.Completion.create(
-            engine="text-davinci-003",
-            prompt=f"Analizza il seguente contenuto per eventuali violazioni delle regole:\n{content}",
-            max_tokens=200,
-            temperature=0.5,
-        )
-        return response.choices[0].text.strip()
-    except Exception as e:
-        print(f"Errore nell'analisi con OpenAI: {e}")
-        return "Errore durante l'analisi del contenuto."
+# Funzione per scaricare i messaggi da un gruppo
+async def download_group_messages(client, group_id, group_title):
+    messages_text = []
+    async for message in client.iter_messages(group_id):
+        sender_id = message.sender_id
+        text = message.message or ""
+        messages_text.append(f"{sender_id}: {text}")
+    
+    # Salva i messaggi in un file
+    filename = f"{group_title.replace(' ', '_')}_messages.txt"
+    with open(filename, "w", encoding="utf-8") as file:
+        file.write("\n".join(messages_text))
+    return filename
 
-# Funzione per monitorare un gruppo
-async def monitor_group(group_link):
-    group_id = group_link.split("/")[-1]
-    tracked_groups[group_link] = {"status": "active", "last_check": datetime.now()}
+# Funzione principale per gestire i comandi
+def start_bot(client):
+    @client.on(events.NewMessage(pattern="/lista"))
+    async def list_handler(event):
+        if event.sender_id != AUTHORIZED_USER_ID:
+            return  # Ignora i messaggi di utenti non autorizzati
 
-    try:
-        # Verifica che il gruppo esista ancora
-        await client.get_entity(group_id)
-        return False  # Gruppo attivo
-    except Exception:
-        # Gruppo bannato/eliminato
-        tracked_groups[group_link]["status"] = "banned"
-        return True  # Gruppo bannato
+        groups = await list_groups(client)
+        if not groups:
+            await event.reply("Non sono unito a nessun gruppo.")
+            return
+        
+        message = "Ecco i gruppi a cui sono unito:\n"
+        for idx, (title, group_id) in enumerate(groups, start=1):
+            message += f"{idx}. {title} (ID: {group_id})\n"
+        await event.reply(message)
 
-# Funzione per analizzare i messaggi del gruppo
-async def analyze_group_content(group_link):
-    print(f"Analizzando il contenuto del gruppo: {group_link}")
-    group = await client.get_entity(group_link)
-    messages = await client.get_messages(group, limit=100)  # Analizza gli ultimi 100 messaggi
-    content = " ".join([msg.message for msg in messages if msg.message])
+    @client.on(events.NewMessage(pattern=r"/see (\d+)"))
+    async def see_handler(event):
+        if event.sender_id != AUTHORIZED_USER_ID:
+            return  # Ignora i messaggi di utenti non autorizzati
+        
+        index = int(event.pattern_match.group(1))
+        groups = await list_groups(client)
+        
+        if index < 1 or index > len(groups):
+            await event.reply("Indice non valido. Usa /lista per vedere i gruppi disponibili.")
+            return
+        
+        group_title, group_id = groups[index - 1]
+        await event.reply(f"Sto scaricando i messaggi del gruppo: {group_title}. Attendi...")
+        
+        filename = await download_group_messages(client, group_id, group_title)
+        await client.send_file(AUTHORIZED_USER_ID, filename, caption=f"Messaggi del gruppo: {group_title}")
+        os.remove(filename)
 
-    print("Inizio analisi con OpenAI...")
-    analysis = analyze_content_with_openai(content)
-    print("Analisi completata.")
-    return analysis
-
-# Funzione per creare una segnalazione email
-def create_report(group_link, analysis):
-    report = (
-        f"Dear Telegram Support,\n\n"
-        f"I would like to report the following group: {group_link}.\n\n"
-        f"This group appears to violate Telegram's Terms of Service based on the following analysis:\n\n"
-        f"{analysis}\n\n"
-        f"Thank you for your prompt attention to this matter.\n\n"
-        f"Best regards,\nA concerned user"
-    )
-    print("Report creato.")
-    return report
-
-# Comando: /start
-@client.on(events.NewMessage(pattern=r"/start"))
-async def start_handler(event):
-    if event.sender_id == AUTHORIZED_USER_ID:
-        await event.reply("Ciao, sono attivo! Utilizza i comandi /report e /lista per monitorare e analizzare i gruppi.")
-        print("Messaggio di avvio inviato all'utente autorizzato.")
-
-# Comando: /report
-@client.on(events.NewMessage(pattern=r"/report (.+)"))
-async def report_handler(event):
-    if event.sender_id != AUTHORIZED_USER_ID:
-        return
-
-    group_link = event.pattern_match.group(1)
-    await event.reply(f"Sto monitorando il gruppo: {group_link}. Attendi per favore...")
-
-    # Aggiungi il gruppo ai tracciati
-    banned = await monitor_group(group_link)
-
-    # Analizza il contenuto del gruppo
-    analysis = await analyze_group_content(group_link)
-    report_message = create_report(group_link, analysis)
-
-    # Invia segnalazione email
-    send_email(
-        to_email="support@telegram.org",
-        subject=f"Group Report: {group_link}",
-        body=report_message,
-    )
-
-    email_preview = (
-        f"Email inviata a support@telegram.org:\n\n"
-        f"Soggetto: Group Report: {group_link}\n\n"
-        f"Corpo del messaggio:\n{report_message}"
-    )
-
-    if banned:
-        tracked_groups[group_link]["status"] = "banned"
-        await event.reply(f"Il gruppo {group_link} è già bannato. Report inviato.\n\n{email_preview}")
-    else:
-        await event.reply(
-            f"Report inviato per il gruppo {group_link}. Continuerà a essere monitorato.\n\n{email_preview}"
-        )
-
-# Comando: /lista
-@client.on(events.NewMessage(pattern=r"/lista"))
-async def list_handler(event):
-    if event.sender_id != AUTHORIZED_USER_ID:
-        return
-
-    message = "Gruppi monitorati:\n"
-    for group, data in tracked_groups.items():
-        status = data["status"]
-        last_check = data["last_check"].strftime("%Y-%m-%d %H:%M:%S")
-        message += f"- {group}: {status} (Ultimo controllo: {last_check})\n"
-
-    await event.reply(message)
-
-# Funzione principale
-async def main():
-    print("Bot attivo e in ascolto...")
-    await client.start()
+    print("Bot avviato e in ascolto...")
+    client.run_until_disconnected()
 
 if __name__ == "__main__":
-    with client:
-        client.loop.run_until_complete(main())
+    clients = initialize_clients()
+    
+    if not clients:
+        print("Nessuna sessione disponibile. Esegui add.py per aggiungere un account.")
+    else:
+        for client in clients:
+            asyncio.run(start_bot(client))
