@@ -163,10 +163,7 @@ async def main():
     client.loop.create_task(monitor_tracked_groups())
 
 if __name__ == "__main__":
+    # Avvia il client Telegram
     with client:
-        client.loop.run_until_complete(main())
-
-
-if __name__ == "__main__":
-    with client:
+        # Il bot rimarrà attivo finché il client è attivo
         client.loop.run_until_complete(main())
