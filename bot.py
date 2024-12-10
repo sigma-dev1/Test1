@@ -12,7 +12,7 @@ from datetime import datetime
 # Credenziali API Telegram
 api_id = 25373607
 api_hash = "3b559c2461a210c9654399b66125bc0b"
-bot_token = "7659684235:AAG7TOMLBRpd7pgNybU0UOrAucvxTANC9H0"
+bot_token = "7396062831:AAFVJ50ZvxuwUlc2D9Pssj_aWAEd8FquG8Y"
 
 # Configurazione SMTP per email
 SMTP_SERVER = "smtp.gmail.com"
@@ -27,8 +27,10 @@ AUTHORIZED_USER_ID = 6849853752  # Cambia con l'ID dell'utente autorizzato
 tracked_groups = {}  # {group_link: {"status": "active/banned/deleted", "last_check": datetime}}
 
 # Inizializza il modello di intelligenza artificiale e il tokenizer
+print("Caricamento del tokenizer e del modello...")
 tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
 model = TFAutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
+print("Tokenizer e modello caricati.")
 
 # Funzione per inviare email
 def send_email(to_email, subject, body):
@@ -50,6 +52,7 @@ def send_email(to_email, subject, body):
 
 # Inizializza il client Telegram
 client = TelegramClient("bot", api_id, api_hash).start(bot_token=bot_token)
+print("Client Telegram inizializzato.")
 
 # Funzione per monitorare un gruppo
 async def monitor_group(group_link):
@@ -67,6 +70,7 @@ async def monitor_group(group_link):
 
 # Funzione per analizzare i messaggi del gruppo
 async def analyze_group_content(group_link):
+    print(f"Analizzando il contenuto del gruppo: {group_link}")
     group = await client.get_entity(group_link)
     messages = await client.get_messages(group, limit=100)  # Analizza gli ultimi 100 messaggi
     content = " ".join([msg.message for msg in messages if msg.message])
@@ -77,6 +81,7 @@ async def analyze_group_content(group_link):
     predictions = tf.nn.softmax(scores).numpy()
     labels = ["NEGATIVE", "POSITIVE"]
     analysis = [{"label": labels[i], "score": predictions[i]} for i in range(len(labels))]
+    print("Analisi completata.")
 
     return analysis
 
@@ -101,6 +106,7 @@ def create_report(group_link, analysis):
             f"Thank you for your prompt attention to this matter.\n\n"
             f"Best regards,\nA concerned user"
         )
+    print("Report creato.")
     return report
 
 # Funzione per inviare notifiche di tracciamento
@@ -124,6 +130,13 @@ async def send_tracking_notifications():
                         f"The group {group_link} has been deleted or banned.",
                     )
             await asyncio.sleep(10)  # Controlla ogni 10 secondi per dimostrazione
+
+# Comando: /start
+@client.on(events.NewMessage(pattern=r"/start"))
+async def start_handler(event):
+    if event.sender_id == AUTHORIZED_USER_ID:
+        await event.reply("Ciao, sto funzionando! Utilizza i comandi /report e /lista per monitorare e analizzare i gruppi.")
+        print("Messaggio di avvio inviato all'utente autorizzato.")
 
 # Comando: /report
 @client.on(events.NewMessage(pattern=r"/report (.+)"))
