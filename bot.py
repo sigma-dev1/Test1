@@ -1,4 +1,5 @@
 import os
+import asyncio
 import requests
 import smtplib
 from email.mime.text import MIMEText
@@ -8,20 +9,27 @@ from telethon import TelegramClient, events
 from telethon.errors.rpcerrorlist import ChannelInvalidError
 from telethon.errors import SessionPasswordNeededError
 
+# Gestione sicura delle configurazioni tramite variabili d'ambiente
+import os
+from dotenv import load_dotenv
+
+# Carica le variabili d'ambiente
+load_dotenv()
+
 # Configurazione API Telegram
-api_id = 25373607  # Sostituisci con il tuo API ID
-api_hash = "3b559c2461a210c9654399b66125bc0b"  # Sostituisci con il tuo API Hash
-AUTHORIZED_USER_ID = 6849853752  # ID dell'utente autorizzato
+api_id = os.getenv('TELEGRAM_API_ID', '25373607')
+api_hash = os.getenv('TELEGRAM_API_HASH', '3b559c2461a210c9654399b66125bc0b')
+AUTHORIZED_USER_ID = int(os.getenv('AUTHORIZED_USER_ID', '6849853752'))
 
 # Configurazione SMTP per email
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-EMAIL_ADDRESS = "abadaalessandro6@gmail.com"
-EMAIL_PASSWORD = "tult pukz jfle txfr"
+SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
+EMAIL_ADDRESS = os.getenv('EMAIL_ADDRESS', 'abadaalessandro6@gmail.com')
+EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', 'tult pukz jfle txfr')
 
 # Token Hugging Face
-HF_TOKEN = "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"
-HF_GENERATION_URL = "https://api-inference.huggingface.co/models/gpt2"
+HF_TOKEN = os.getenv('HF_TOKEN', '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')
+HF_GENERATION_URL = os.getenv('HF_GENERATION_URL', 'https://api-inference.huggingface.co/models/gpt2')
 
 # Inizializza il client Telegram
 client = TelegramClient("userbot", api_id, api_hash)
@@ -55,13 +63,17 @@ def generate_report_text(group_username):
         "Authorization": f"Bearer {HF_TOKEN}",
     }
 
-    response = requests.post(HF_GENERATION_URL, headers=headers, json={"inputs": prompt})
+    try:
+        response = requests.post(HF_GENERATION_URL, headers=headers, json={"inputs": prompt})
 
-    if response.status_code == 200:
-        return response.json()[0]["generated_text"]
-    else:
-        print("Error generating text:", response.text)
-        return "Error generating report."
+        if response.status_code == 200:
+            return response.json()[0]["generated_text"]
+        else:
+            print("Error generating text:", response.text)
+            return "Error generating report."
+    except Exception as e:
+        print(f"Errore nella generazione del testo: {e}")
+        return "Impossibile generare il report."
 
 # Funzione per verificare se il gruppo è stato bannato o eliminato
 async def check_group_status(group_username):
@@ -70,7 +82,8 @@ async def check_group_status(group_username):
         return "active"  # Gruppo ancora attivo
     except ChannelInvalidError:
         return "banned"  # Gruppo bannato o eliminato
-    except Exception:
+    except Exception as e:
+        print(f"Errore nella verifica dello stato del gruppo: {e}")
         return "unknown"  # Altro errore
 
 # Funzione per creare la segnalazione email
