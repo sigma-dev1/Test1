@@ -5,11 +5,12 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from telethon import TelegramClient, events
-from telethon.errors.rpcerrorlist import UserPrivacyRestrictedError, ChannelInvalidError
+from telethon.errors.rpcerrorlist import ChannelInvalidError
+from telethon.errors import SessionPasswordNeededError
 
 # Configurazione API Telegram
-api_id = 25373607
-api_hash = "3b559c2461a210c9654399b66125bc0b"
+api_id = 25373607  # Sostituisci con il tuo API ID
+api_hash = "3b559c2461a210c9654399b66125bc0b"  # Sostituisci con il tuo API Hash
 AUTHORIZED_USER_ID = 6849853752  # ID dell'utente autorizzato
 
 # Configurazione SMTP per email
@@ -20,13 +21,13 @@ EMAIL_PASSWORD = "tult pukz jfle txfr"
 
 # Token Hugging Face
 HF_TOKEN = "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"
-HF_GENERATION_URL = "https://api-inference.huggingface.co/models/gpt-3.5-turbo"
+HF_GENERATION_URL = "https://api-inference.huggingface.co/models/gpt2"
 
 # Inizializza il client Telegram
 client = TelegramClient("userbot", api_id, api_hash)
 
 # Stato dei gruppi monitorati
-tracked_groups = {}  # {group_username: {"status": "active/banned", "last_check": datetime, "reported_at": datetime}}
+tracked_groups = {}
 
 # Funzione per inviare email
 def send_email(to_email, subject, body):
@@ -46,46 +47,52 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print(f"Errore durante l'invio dell'email: {e}")
 
-# Funzione per generare una segnalazione con Hugging Face
-def generate_email_content(group_username, analysis_summary):
-    prompt = (
-        f"Write a formal email to Telegram Support reporting the group @{group_username}. "
-        f"The group violates Telegram's policies. Here is the analysis summary:\n{analysis_summary}\n\n"
-        f"Write a professional and concise report."
-    )
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {"inputs": prompt, "parameters": {"max_length": 300}}
-    response = requests.post(HF_GENERATION_URL, headers=headers, json=payload)
-    if response.status_code == 200:
-        return response.json().get("generated_text", "Error generating email content.")
-    else:
-        return "Error: Unable to generate email content."
+# Funzione per generare un testo professionale per la segnalazione
+def generate_report_text(group_username):
+    prompt = f"Please generate a professional email report about the group @{group_username} which violates Telegram's Terms of Service. Include necessary details to request banning of the group."
 
-# Funzione per analizzare i messaggi da un file
-def analyze_text(file_path):
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+    }
+
+    response = requests.post(HF_GENERATION_URL, headers=headers, json={"inputs": prompt})
+
+    if response.status_code == 200:
+        return response.json()[0]["generated_text"]
+    else:
+        print("Error generating text:", response.text)
+        return "Error generating report."
+
+# Funzione per verificare se il gruppo è stato bannato o eliminato
+async def check_group_status(group_username):
     try:
-        with open(file_path, "r") as file:
-            text = file.read()
-        prompt = (
-            f"Analyze the following group chat messages for harmful content. Summarize the violations and behaviors found:\n{text}"
-        )
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        payload = {"inputs": prompt, "parameters": {"max_length": 300}}
-        response = requests.post(HF_GENERATION_URL, headers=headers, json=payload)
-        if response.status_code == 200:
-            return response.json().get("generated_text", "Error analyzing text.")
-        else:
-            return "Error: Unable to analyze text."
-    except Exception as e:
-        return f"Errore durante l'analisi del file: {e}"
+        await client.get_entity(group_username)
+        return "active"  # Gruppo ancora attivo
+    except ChannelInvalidError:
+        return "banned"  # Gruppo bannato o eliminato
+    except Exception:
+        return "unknown"  # Altro errore
+
+# Funzione per creare la segnalazione email
+def create_email_report(group_username):
+    report = (
+        f"Dear Telegram Support,\n\n"
+        f"I would like to report the group @{group_username} for violating Telegram's Terms of Service. "
+        f"Please review the content and take appropriate action.\n\n"
+        f"Thank you for your attention.\n\n"
+        f"Best regards,\nA concerned user"
+    )
+    return report
 
 # Comando: /start
 @client.on(events.NewMessage(pattern=r"/start"))
 async def start_handler(event):
     if event.sender_id == AUTHORIZED_USER_ID:
-        await event.reply("Userbot attivo! Usa /report <username> per segnalare un gruppo o /lista per vedere i gruppi monitorati.")
+        await event.reply(
+            "Hello! I am active. Use /report <username> to monitor a group and /lista to view the monitored groups."
+        )
     else:
-        await event.reply("Non sei autorizzato a usare questo bot.")
+        await event.reply("You are not authorized to use this bot.")
 
 # Comando: /report <username>
 @client.on(events.NewMessage(pattern=r"/report (.+)"))
@@ -94,20 +101,33 @@ async def report_handler(event):
         return
 
     group_username = event.pattern_match.group(1).strip()
-    await event.reply(f"Inserisci il file .txt dei messaggi per analizzare il gruppo @{group_username}.")
-    tracked_groups[group_username] = {"status": "active", "reported_at": datetime.now(), "last_check": datetime.now()}
+    await event.reply(f"Analyzing group @{group_username}...")
 
-# Gestione dei file caricati per analisi
-@client.on(events.NewMessage)
-async def file_handler(event):
-    if event.sender_id == AUTHORIZED_USER_ID and event.file:
-        file_path = await event.download_media()
-        group_username = list(tracked_groups.keys())[-1]
-        analysis_summary = analyze_text(file_path)
-        email_body = generate_email_content(group_username, analysis_summary)
-        send_email("support@telegram.org", f"Report for @{group_username}", email_body)
-        await event.reply(f"Analisi completata e segnalazione inviata per @{group_username}.")
-        os.remove(file_path)
+    try:
+        # Verifica se il bot è nel gruppo
+        group = await client.get_entity(group_username)
+    except Exception:
+        await event.reply(f"Group @{group_username} not found or inaccessible.")
+        return
+
+    # Aggiorna o aggiungi il gruppo alla lista monitorata
+    if group_username not in tracked_groups:
+        tracked_groups[group_username] = {
+            "status": "active",
+            "last_check": datetime.now(),
+            "reported_at": datetime.now(),
+        }
+        
+        # Genera il testo per la segnalazione
+        email_body = generate_report_text(group_username)
+        send_email(
+            to_email="support@telegram.org",
+            subject=f"Group Report: @{group_username}",
+            body=email_body,
+        )
+        await event.reply(f"Group @{group_username} has been reported and is now being monitored.")
+    else:
+        await event.reply(f"Group @{group_username} is already being monitored.")
 
 # Comando: /lista
 @client.on(events.NewMessage(pattern=r"/lista"))
@@ -116,20 +136,58 @@ async def list_handler(event):
         return
 
     if not tracked_groups:
-        await event.reply("Nessun gruppo monitorato al momento.")
-    else:
-        message = "Gruppi monitorati:\n"
-        for group, data in tracked_groups.items():
-            status = data["status"]
-            last_check = data["last_check"].strftime("%Y-%m-%d %H:%M:%S")
-            reported_at = data["reported_at"].strftime("%Y-%m-%d %H:%M:%S")
-            message += f"- @{group}: {status} (Ultimo controllo: {last_check}, Segnalato: {reported_at})\n"
-        await event.reply(message)
+        await event.reply("No groups are currently being monitored.")
+        return
 
-# Avvia il bot
+    message = "Monitored groups:\n"
+    for group, data in tracked_groups.items():
+        status = data["status"]
+        last_check = data["last_check"].strftime("%Y-%m-%d %H:%M:%S")
+        reported_at = data["reported_at"].strftime("%Y-%m-%d %H:%M:%S")
+        message += f"- @{group}: {status} (Last check: {last_check}, Reported: {reported_at})\n"
+
+    await event.reply(message)
+
+# Funzione per monitorare i gruppi segnalati
+async def monitor_groups():
+    while True:
+        now = datetime.now()
+        for group, data in list(tracked_groups.items()):
+            # Controlla lo stato del gruppo
+            status = await check_group_status(group)
+            last_status = data["status"]
+
+            # Aggiorna lo stato se è cambiato
+            if status != last_status:
+                tracked_groups[group]["status"] = status
+                tracked_groups[group]["last_check"] = now
+
+                # Invia notifica all'utente
+                if status == "banned":
+                    await client.send_message(
+                        AUTHORIZED_USER_ID,
+                        f"Group @{group} has been banned or deleted. Report successful!",
+                    )
+                elif status == "active":
+                    await client.send_message(
+                        AUTHORIZED_USER_ID,
+                        f"Group @{group} has been reactivated. Report unsuccessful!",
+                    )
+            # Notifica se il gruppo non è stato bannato entro 2 settimane
+            elif last_status == "active" and (now - data["reported_at"]) > timedelta(weeks=2):
+                await client.send_message(
+                    AUTHORIZED_USER_ID,
+                    f"Group @{group} has not been banned after 2 weeks. Report failed."
+                )
+                del tracked_groups[group]  # Rimuove il gruppo dalla lista
+
+        await asyncio.sleep(3600)  # Controlla ogni ora
+
+# Funzione principale
 async def main():
-    print("Userbot avviato.")
+    print("Userbot attivo e in ascolto...")
     await client.start()
+    client.loop.create_task(monitor_groups())
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
