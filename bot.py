@@ -9,14 +9,14 @@ from telethon.errors.rpcerrorlist import UserPrivacyRestrictedError, ChannelInva
 
 # Configurazione API Telegram
 api_id = 25373607
-api_hash = '3b559c2461a210c9654399b66125bc0b'
+api_hash = "3b559c2461a210c9654399b66125bc0b"
 AUTHORIZED_USER_ID = 6849853752  # ID dell'utente autorizzato
 
 # Configurazione SMTP per email
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-EMAIL_ADDRESS = "tuo_email@gmail.com"
-EMAIL_PASSWORD = "tuo_password"
+EMAIL_ADDRESS = "abadaalessandro6@gmail.com"
+EMAIL_PASSWORD = "tult pukz jfle txfr"
 
 # Token Hugging Face
 HF_TOKEN = "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"
