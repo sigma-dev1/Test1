@@ -21,7 +21,7 @@ EMAIL_ADDRESS = "abadaalessandro6@gmail.com"
 EMAIL_PASSWORD = "tult pukz jfle txfr"
 
 # Token OpenAI
-OPENAI_API_KEY = "non ho mai cappato non vorrei cappare ora"
+OPENAI_API_KEY = "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"
 
 # Inizializza il client Telegram come bot
 client = TelegramClient("bot", api_id, api_hash).start(bot_token=bot_token)
