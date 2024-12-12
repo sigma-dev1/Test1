@@ -11,7 +11,7 @@ from telethon.errors.rpcerrorlist import ChannelInvalidError
 # Configurazione API Telegram (direttamente nello script)
 api_id = 25373607
 api_hash = "3b559c2461a210c9654399b66125bc0b"
-bot_token = "il_tuo_bot_token"  # Inserisci il token del bot qui
+bot_token = "7659684235:AAG7TOMLBRpd7pgNybU0UOrAucvxTANC9H0"  # Inserisci il token del bot qui
 AUTHORIZED_USER_ID = 6849853752
 
 # Configurazione SMTP per email
