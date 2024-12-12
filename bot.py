@@ -1,161 +1,193 @@
-import os
 import asyncio
-import sqlite3
-import requests
+import os
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
+import sqlite3
+from telethon import TelegramClient, events
+from telethon.errors import ChannelInvalidError
 
-# Carica le variabili d'ambiente
-load_dotenv()
+# Configurazioni
+api_id = 25373607  # Tuo API ID
+api_hash = "3b559c2461a210c9654399b66125bc0b"  # Tuo API Hash
+AUTHORIZED_USER_ID = 6849853752  # Il tuo ID utente Telegram
 
-# Configurazione API Telegram
-BOT_TOKEN = os.getenv("BOT_TOKEN", "7659684235:AAG7TOMLBRpd7pgNybU0UOrAucvxTANC9H0")
-AUTHORIZED_USER_ID = int(os.getenv("AUTHORIZED_USER_ID", "6849853752"))
+# Nome del database SQLite
+DB_NAME = "groups.db"
 
-# Configurazione Hugging Face
-HF_TOKEN = os.getenv("HF_TOKEN", "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")
-HF_GENERATION_URL = os.getenv("HF_GENERATION_URL", "https://api-inference.huggingface.co/models/gpt2")
+# Inizializza il client Telegram
+client = TelegramClient("bot", api_id, api_hash)
 
-# Inizializza il bot
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
 
-# Database
-DATABASE_PATH = "groups.db"
-
-def initialize_database():
-    conn = sqlite3.connect(DATABASE_PATH)
+# Funzione per creare il database se non esiste
+def create_database():
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS groups (
+        CREATE TABLE IF NOT EXISTS tracked_groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            status TEXT NOT NULL,
-            last_check DATETIME NOT NULL,
-            reported_at DATETIME NOT NULL
+            group_username TEXT UNIQUE,
+            status TEXT,
+            last_check TIMESTAMP,
+            reported_at TIMESTAMP
         )
     """)
     conn.commit()
     conn.close()
 
-# Funzione per aggiungere o aggiornare i gruppi nel database
-def add_or_update_group(username, status, reported_at=None):
-    conn = sqlite3.connect(DATABASE_PATH)
+
+# Funzione per aggiungere un gruppo al database
+def add_group_to_db(group_username):
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    now = datetime.now()
     cursor.execute("""
-        INSERT INTO groups (username, status, last_check, reported_at)
+        INSERT OR IGNORE INTO tracked_groups (group_username, status, last_check, reported_at)
         VALUES (?, ?, ?, ?)
-        ON CONFLICT(username) DO UPDATE SET
-        status=excluded.status, last_check=excluded.last_check
-    """, (username, status, datetime.now(), reported_at or datetime.now()))
+    """, (group_username, "active", now, now))
     conn.commit()
     conn.close()
 
-# Funzione per ottenere lo stato dei gruppi
-def get_groups():
-    conn = sqlite3.connect(DATABASE_PATH)
+
+# Funzione per aggiornare lo stato di un gruppo nel database
+def update_group_status(group_username, status):
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT username, status, last_check, reported_at FROM groups")
-    rows = cursor.fetchall()
+    now = datetime.now()
+    cursor.execute("""
+        UPDATE tracked_groups
+        SET status = ?, last_check = ?
+        WHERE group_username = ?
+    """, (status, now, group_username))
+    conn.commit()
     conn.close()
-    return rows
+
+
+# Funzione per recuperare tutti i gruppi dal database
+def get_all_groups():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tracked_groups")
+    groups = cursor.fetchall()
+    conn.close()
+    return groups
+
 
 # Funzione per eliminare un gruppo dal database
-def remove_group(username):
-    conn = sqlite3.connect(DATABASE_PATH)
+def remove_group_from_db(group_username):
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM groups WHERE username = ?", (username,))
+    cursor.execute("DELETE FROM tracked_groups WHERE group_username = ?", (group_username,))
     conn.commit()
     conn.close()
 
-# Funzione per generare un report tramite Hugging Face
-def generate_report_text(group_username):
-    prompt = f"Please generate a professional email report about the group @{group_username} which violates Telegram's Terms of Service. Include necessary details to request banning of the group."
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+
+# Funzione per verificare se un gruppo è attivo o bannato
+async def check_group_status(group_username):
+    try:
+        await client.get_entity(group_username)
+        return "active"
+    except ChannelInvalidError:
+        return "banned"
+    except Exception as e:
+        print(f"Errore durante il controllo del gruppo @{group_username}: {e}")
+        return "unknown"
+
+
+# Comando /start
+@client.on(events.NewMessage(pattern=r"/start"))
+async def start_handler(event):
+    if event.sender_id == AUTHORIZED_USER_ID:
+        await event.reply("Ciao! Sono attivo. Usa /report <username> per segnalare un gruppo o /lista per vedere i gruppi monitorati.")
+    else:
+        await event.reply("Non sei autorizzato a usare questo bot.")
+
+
+# Comando /report <username>
+@client.on(events.NewMessage(pattern=r"/report (.+)"))
+async def report_handler(event):
+    if event.sender_id != AUTHORIZED_USER_ID:
+        return
+
+    group_username = event.pattern_match.group(1).strip()
+    await event.reply(f"Segnalando il gruppo @{group_username}...")
 
     try:
-        response = requests.post(HF_GENERATION_URL, headers=headers, json={"inputs": prompt})
-        if response.status_code == 200:
-            return response.json()[0]["generated_text"]
-        else:
-            return "Error generating report."
+        # Verifica se il gruppo esiste
+        await client.get_entity(group_username)
+        add_group_to_db(group_username)
+        await event.reply(f"Il gruppo @{group_username} è stato segnalato e ora è monitorato.")
     except Exception as e:
-        return f"Error: {e}"
+        await event.reply(f"Errore: impossibile segnalare il gruppo @{group_username}. {e}")
 
-# Comando: /start
-@dp.message_handler(commands=["start"])
-async def start_handler(message: types.Message):
-    if message.from_user.id == AUTHORIZED_USER_ID:
-        await message.reply("Il bot è attivo. Usa /report <username> per segnalare un gruppo e /lista per vedere lo stato dei gruppi.")
-    else:
-        await message.reply("Non sei autorizzato a utilizzare questo bot.")
 
-# Comando: /report <username>
-@dp.message_handler(commands=["report"])
-async def report_handler(message: types.Message):
-    if message.from_user.id != AUTHORIZED_USER_ID:
+# Comando /lista
+@client.on(events.NewMessage(pattern=r"/lista"))
+async def list_handler(event):
+    if event.sender_id != AUTHORIZED_USER_ID:
         return
 
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        await message.reply("Devi specificare un username di gruppo. Usa /report <username>.")
-        return
-
-    group_username = args[1].strip()
-    await message.reply(f"Segnalazione del gruppo @{group_username} in corso...")
-
-    # Aggiungi al database e invia segnalazione
-    add_or_update_group(group_username, status="active")
-    email_body = generate_report_text(group_username)
-
-    await message.reply(f"Il gruppo @{group_username} è stato segnalato e monitorato.")
-    # La segnalazione viene inviata in background
-
-# Comando: /lista
-@dp.message_handler(commands=["lista"])
-async def list_handler(message: types.Message):
-    if message.from_user.id != AUTHORIZED_USER_ID:
-        return
-
-    groups = get_groups()
+    groups = get_all_groups()
     if not groups:
-        await message.reply("Nessun gruppo attualmente monitorato.")
+        await event.reply("Nessun gruppo monitorato al momento.")
         return
 
-    message_text = "Stato dei gruppi monitorati:\n"
+    message = "Gruppi monitorati:\n"
     for group in groups:
-        username, status, last_check, reported_at = group
-        last_check = datetime.strptime(last_check, "%Y-%m-%d %H:%M:%S")
-        reported_at = datetime.strptime(reported_at, "%Y-%m-%d %H:%M:%S")
-        message_text += f"- @{username}: {status} (Ultimo controllo: {last_check}, Segnalato: {reported_at})\n"
+        group_username, status, last_check, reported_at = group[1], group[2], group[3], group[4]
+        message += f"- @{group_username}: {status} (Ultimo controllo: {last_check}, Segnalato: {reported_at})\n"
 
-    await message.reply(message_text)
+    await event.reply(message)
 
-# Task per monitorare i gruppi ogni 3 ore
+
+# Funzione per monitorare periodicamente i gruppi
 async def monitor_groups():
     while True:
-        groups = get_groups()
+        print("Controllo lo stato dei gruppi monitorati...")
+        groups = get_all_groups()
+        now = datetime.now()
+
         for group in groups:
-            username, status, last_check, reported_at = group
-            if status == "active":
-                # Controlla se il gruppo è stato bannato
-                # Simuliamo con un controllo placeholder (esempio reale: chiamata API Telegram)
-                banned = False  # Placeholder per il controllo effettivo
+            group_username, status, last_check, reported_at = group[1], group[2], group[3], group[4]
 
-                if banned:
-                    add_or_update_group(username, "banned")
-                    await bot.send_message(AUTHORIZED_USER_ID, f"Il gruppo @{username} è stato bannato.")
-                elif (datetime.now() - datetime.strptime(reported_at, "%Y-%m-%d %H:%M:%S")) > timedelta(weeks=2):
-                    await bot.send_message(AUTHORIZED_USER_ID, f"Il gruppo @{username} non è stato bannato entro 2 settimane.")
-                    remove_group(username)
+            # Controlla lo stato del gruppo
+            new_status = await check_group_status(group_username)
 
-        await asyncio.sleep(10800)  # 3 ore in secondi
+            if new_status != status:
+                update_group_status(group_username, new_status)
 
-# Avvio del bot
+                # Notifica l'utente
+                if new_status == "banned":
+                    time_banned = now - datetime.strptime(reported_at, "%Y-%m-%d %H:%M:%S")
+                    await client.send_message(
+                        AUTHORIZED_USER_ID,
+                        f"Il gruppo @{group_username} è stato bannato. Tempo bannato: {time_banned}."
+                    )
+                elif new_status == "active":
+                    await client.send_message(
+                        AUTHORIZED_USER_ID,
+                        f"Il gruppo @{group_username} è stato sbannato. Riprovo a segnalarlo..."
+                    )
+                    # Riprova a segnalare il gruppo
+                    add_group_to_db(group_username)
+
+            # Notifica se il gruppo non è stato bannato entro 2 settimane
+            if status == "active" and (now - datetime.strptime(reported_at, "%Y-%m-%d %H:%M:%S")) > timedelta(weeks=2):
+                await client.send_message(
+                    AUTHORIZED_USER_ID,
+                    f"Il gruppo @{group_username} non è stato bannato entro 2 settimane. Segnalazione non riuscita."
+                )
+                remove_group_from_db(group_username)
+
+        await asyncio.sleep(10800)  # Aspetta 3 ore prima del prossimo controllo
+
+
+# Funzione principale
+async def main():
+    create_database()  # Crea il database se non esiste
+    print("Bot avviato e in ascolto...")
+    await client.start()
+    client.loop.create_task(monitor_groups())
+    await client.run_until_disconnected()
+
+
 if __name__ == "__main__":
-    initialize_database()
-    loop = asyncio.get_event_loop()
-    loop.create_task(monitor_groups())
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
